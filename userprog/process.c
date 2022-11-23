@@ -178,21 +178,13 @@ process_exec (void *f_name) {
   /* And then load the binary */
   success = load (file_name, &_if);
 
-  // hex_dump ((char *) &_if, (char *) &_if, 192, true);
-  // hex_dump ((char *) USER_STACK, (char *) USER_STACK, 192, true);
-  // printf ("STRING: %s\n", USER_STACK - 10);
-  hex_dump (_if.rsp, _if.rsp, USER_STACK - (_if.rsp), true);
+  hex_dump (_if.R.rsi, _if.R.rsi, USER_STACK - _if.R.rsi, true);
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
   if (!success)
     return -1;
 
-  printf ("###########################\n");
-  printf ("####                  #####\n");
-  printf ("#### BEFORE do_iret!! #####\n");
-  printf ("####                  #####\n");
-  printf ("###########################\n");
   /* Start switched process. */
   do_iret (&_if);
   NOT_REACHED ();
@@ -475,11 +467,8 @@ load (const char *file_name, struct intr_frame *if_) {
 
   stack_ptr -= 8;
   memset (stack_ptr, 0, 8);
-  printf ("%d,%x\n", argc, address[0]);
   if_->R.rdi = argc - 1;
-  if_->R.rsi = address[0];
-
-  hex_dump (USER_STACK - 300, USER_STACK - 300, 300, true);
+  if_->R.rsi = stack_ptr + 8;
 
   success = true;
 
