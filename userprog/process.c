@@ -178,11 +178,21 @@ process_exec (void *f_name) {
   /* And then load the binary */
   success = load (file_name, &_if);
 
+  // hex_dump ((char *) &_if, (char *) &_if, 192, true);
+  // hex_dump ((char *) USER_STACK, (char *) USER_STACK, 192, true);
+  // printf ("STRING: %s\n", USER_STACK - 10);
+  hex_dump (_if.rsp, _if.rsp, USER_STACK - (_if.rsp), true);
+
   /* If load failed, quit. */
   palloc_free_page (file_name);
   if (!success)
     return -1;
 
+  printf ("###########################\n");
+  printf ("####                  #####\n");
+  printf ("#### BEFORE do_iret!! #####\n");
+  printf ("####                  #####\n");
+  printf ("###########################\n");
   /* Start switched process. */
   do_iret (&_if);
   NOT_REACHED ();
@@ -202,9 +212,9 @@ process_wait (tid_t child_tid UNUSED) {
   /* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
    * XXX:       to add infinite loop here before
    * XXX:       implementing the process_wait. */
-  // while(1){
-  //   continue;
-  // }
+  while (1) {
+    continue;
+  }
   return -1;
 }
 
@@ -329,6 +339,25 @@ load (const char *file_name, struct intr_frame *if_) {
   bool success = false;
   int i;
 
+  /* For Project 2 - start */
+  char *argv[LOADER_ARGS_LEN / 2 + 1];   // arguments value
+  int argc = 0;                          // arguments count
+
+  char *token;   // parsing unit
+  char *remain_string;
+
+  token = strtok_r (file_name, " ", &remain_string);
+  argv[0] = token;
+
+  while (token != NULL) {
+    token = strtok_r (NULL, " ", &remain_string);
+    argc++;
+    argv[argc] = token;
+  }
+  file_name = argv[0];
+
+  /* For Project 2 - end */
+
   /* Allocate and activate page directory. */
   t->pml4 = pml4_create ();
   if (t->pml4 == NULL)
@@ -413,6 +442,44 @@ load (const char *file_name, struct intr_frame *if_) {
 
   /* TODO: Your code goes here.
    * TODO: Implement argument passing (see project2/argument_passing.html). */
+  char *stack_ptr = USER_STACK;
+  char *address[LOADER_ARGS_LEN / 2 + 1];
+  int len_acc = 0;
+
+  for (i = argc - 1; i >= 0; i--) {
+    int len = strlen (argv[i]) + 1;
+    len_acc += len;
+    stack_ptr -= len;
+    address[i] = stack_ptr;
+    memcpy (stack_ptr, argv[i], len);
+  }
+
+  if (len_acc / 8) {
+    int pad_l;
+
+    pad_l = ((len_acc + 7) / 8) * 8 - len_acc;
+
+    stack_ptr -= pad_l;
+    memset (stack_ptr, 0, pad_l);
+  }
+
+  for (i = argc; i >= 0; i--) {
+    if (i == argc) {
+      stack_ptr -= 8;
+      *(char **) stack_ptr = 0;
+    } else {
+      stack_ptr -= 8;
+      *(char **) stack_ptr = address[i];
+    }
+  }
+
+  stack_ptr -= 8;
+  memset (stack_ptr, 0, 8);
+  printf ("%d,%x\n", argc, address[0]);
+  if_->R.rdi = argc - 1;
+  if_->R.rsi = address[0];
+
+  hex_dump (USER_STACK - 300, USER_STACK - 300, 300, true);
 
   success = true;
 
