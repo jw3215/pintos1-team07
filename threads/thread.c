@@ -103,7 +103,7 @@ thread_init (void) {
                             .address = (uint64_t) gdt};
   lgdt (&gdt_ds);
 
-  /* Init the globla thread context */
+  /* Init the global thread context */
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&destruction_req);
@@ -183,13 +183,19 @@ thread_create (const char *name, int priority, thread_func *function,
   ASSERT (function != NULL);
 
   /* Allocate thread. */
-  t = palloc_get_page (PAL_ZERO);
+  t = palloc_get_page (PAL_ZERO);   // 커널스택과 thread_struct
   if (t == NULL)
     return TID_ERROR;
 
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
+
+  struct child *child_obj = malloc (sizeof (struct child));
+  child_obj->child_thread_p = t;
+  child_obj->exit_err = 0xFFFF;
+
+  list_push_back (&thread_current ()->child_processes, &child_obj->elem);
 
   /* Call the kernel_thread if it scheduled.
    * Note) rdi is 1st argument, and rsi is 2nd argument. */
@@ -338,8 +344,8 @@ test_max_priority (void) {
   if (!list_empty (&ready_list))
     if (list_entry (list_begin (&ready_list), struct thread, elem)->priority >
         thread_current ()->priority)
-        if(thread_current() !=idle_thread)
-          thread_yield ();
+      if (thread_current () != idle_thread)
+        thread_yield ();
 }
 
 /*
@@ -479,7 +485,19 @@ init_thread (struct thread *t, const char *name, int priority) {
   t->init_pri = priority;
   t->waitLock = NULL;
   list_init (&t->dona);
-  // list_init (&t->dona_elem);
+
+  /* For Project 2 */
+  t->exit_err = 0xFFFF;
+  t->fd_no = 2;
+  t->process_waiting_for = 0;
+
+  list_init (&t->child_processes);
+  list_init (&t->files);
+
+  t->parent = running_thread ();
+  // thread_current는 사용불가 running thread assertion에 걸림
+  t->me = NULL;
+  sema_init (&t->child_lock, 0);
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should

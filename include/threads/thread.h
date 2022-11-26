@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include <threads/synch.h>
 #include "threads/interrupt.h"
 #ifdef VM
 #include "vm/vm.h"
@@ -97,6 +98,19 @@ struct thread {
   struct list dona;
   struct list_elem dona_elem;
 
+  /* for project2 */
+  int exit_err;
+  bool exec_success;
+  int fd_no;                     // start from 2  (0,1,2 is reserved)
+  tid_t process_waiting_for;     // child procces that waiting for waiting
+                                 // only one child at a time.
+  struct list child_processes;   // list of child processes
+  struct list files;             // list of files
+
+  struct thread *parent;         // current thread's parrent
+  struct file *me;               // file running in current process
+  struct semaphore child_lock;   // wait for child terminated
+
   /* Shared between thread.c and synch.c. */
   struct list_elem elem; /* List element. */
 
@@ -112,6 +126,12 @@ struct thread {
   /* Owned by thread.c. */
   struct intr_frame tf; /* Information for switching */
   unsigned magic;       /* Detects stack overflow. */
+};
+
+struct child {
+  struct thread *child_thread_p;
+  struct list_elem elem;
+  int exit_err;
 };
 
 /* If false (default), use round-robin scheduler.

@@ -40,18 +40,26 @@ process_init (void) {
  * Notice that THIS SHOULD BE CALLED ONCE. */
 tid_t
 process_create_initd (const char *file_name) {
+  char *name;
+  char *_remainer;
   char *fn_copy;
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
    * Otherwise there's a race between the caller and load(). */
-  fn_copy = palloc_get_page (0);
+  fn_copy = palloc_get_page (0);   // for initial argument
   if (fn_copy == NULL)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, initd, fn_copy);
+  name = (char *) malloc (strlen (file_name) + 1);
+  strlcpy (name, file_name, strlen (file_name) + 1);
+  name = strtok_r (name, " ", &_remainer);
+
+  tid = thread_create (name, PRI_DEFAULT, initd, fn_copy);
+  free (name);
+
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy);
   return tid;
@@ -64,7 +72,7 @@ initd (void *f_name) {
   supplemental_page_table_init (&thread_current ()->spt);
 #endif
 
-  process_init ();
+  process_init ();   //! 프로세스로서 구별되는 기점: 자원할당, 쓰레드 그룹...
 
   if (process_exec (f_name) < 0)
     PANIC ("Fail to launch initd\n");
@@ -121,7 +129,7 @@ __do_fork (void *aux) {
   struct thread *parent = (struct thread *) aux;
   struct thread *current = thread_current ();
   /* TODO: somehow pass the parent_if. (i.e. process_fork()'s if_) */
-  struct intr_frame *parent_if;
+  struct intr_frame *parent_if = &parent->tf;
   bool succ = true;
 
   /* 1. Read the cpu context to local stack. */
@@ -177,8 +185,8 @@ process_exec (void *f_name) {
 
   /* And then load the binary */
   success = load (file_name, &_if);
-
-  hex_dump (_if.R.rsi, _if.R.rsi, USER_STACK - _if.R.rsi, true);
+  // 인터럽트 프레임에 필요한 정보를 load한다.
+  // (do_iret으로 유저프로그램 쪽으로 rip 이동하기 위해서)
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
@@ -190,33 +198,64 @@ process_exec (void *f_name) {
   NOT_REACHED ();
 }
 
-/* Waits for thread TID to die and returns its exit status.  If
- * it was terminated by the kernel (i.e. killed due to an
- * exception), returns -1.  If TID is invalid or if it was not a
- * child of the calling process, or if process_wait() has already
- * been successfully called for the given TID, returns -1
+/* Waits for thread TID to die and returns its exit status.
+ * If it was terminated by the kernel
+ * (i.e. killed due to an exception), returns 1.
+ * If TID is invalid or if it was not a child of the calling process, or if
+ * process_wait() has already been successfully called for the given TID,
+ * returns -1
  * immediately, without waiting.
- *
  * This function will be implemented in problem 2-2.  For now, it
  * does nothing. */
 int
 process_wait (tid_t child_tid UNUSED) {
-  /* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
-   * XXX:       to add infinite loop here before
-   * XXX:       implementing the process_wait. */
-  while (1) {
-    continue;
+  //! infinite loop
+  // while (1) {
+  //   continue;
+  // }
+  // return -1;
+
+  struct list_elem *cur;
+  struct list_elem *c_node = NULL;
+
+  struct thread *t = thread_current ();
+  struct child *c = NULL;
+
+  for (cur = list_begin (&t->child_processes);
+       cur != list_end (&t->child_processes); cur = list_next (cur)) {
+
+    struct child *temp_child = list_entry (cur, struct child, elem);
+
+    if ((temp_child->child_thread_p->tid) == child_tid) {
+      c = temp_child;
+      c_node = cur;
+    }
   }
-  return -1;
+
+  // todo: invalid pid case??
+
+  if (!c) {
+    return -1;
+  }
+
+  // if (!c_node){ return -1; } //? 꼭 해야하는가. list가 비어있는 케이스?
+
+  t->process_waiting_for = c->child_thread_p->tid;
+  sema_down (&t->child_lock);
+
+  int i = c->exit_err;
+
+  list_remove (c_node);
+  return i;
 }
 
 /* Exit the process. This function is called by thread_exit (). */
 void
 process_exit (void) {
   struct thread *curr = thread_current ();
+
+  printf ("%s: exit(%d)\n", curr->name, curr->exit_err);
   /* TODO: Your code goes here.
-   * TODO: Implement process termination message (see
-   * TODO: project2/process_termination.html).
    * TODO: We recommend you to implement process resource cleanup here. */
   process_cleanup ();
 }
@@ -331,7 +370,7 @@ load (const char *file_name, struct intr_frame *if_) {
   bool success = false;
   int i;
 
-  /* For Project 2 - start */
+  /* For Project 2 - parse arguments */
   char *argv[LOADER_ARGS_LEN / 2 + 1];   // arguments value
   int argc = 0;                          // arguments count
 
@@ -347,8 +386,6 @@ load (const char *file_name, struct intr_frame *if_) {
     argv[argc] = token;
   }
   file_name = argv[0];
-
-  /* For Project 2 - end */
 
   /* Allocate and activate page directory. */
   t->pml4 = pml4_create ();
@@ -432,43 +469,41 @@ load (const char *file_name, struct intr_frame *if_) {
   /* Start address. */
   if_->rip = ehdr.e_entry;
 
-  /* TODO: Your code goes here.
-   * TODO: Implement argument passing (see project2/argument_passing.html). */
-  char *stack_ptr = USER_STACK;
+  /* argument passing implemented */
   char *address[LOADER_ARGS_LEN / 2 + 1];
   int len_acc = 0;
 
   for (i = argc - 1; i >= 0; i--) {
     int len = strlen (argv[i]) + 1;
     len_acc += len;
-    stack_ptr -= len;
-    address[i] = stack_ptr;
-    memcpy (stack_ptr, argv[i], len);
+    if_->rsp -= len;
+    address[i] = if_->rsp;
+    memcpy (if_->rsp, argv[i], len);
   }
 
-  if (len_acc / 8) {
+  if (len_acc % 8) {
     int pad_l;
 
     pad_l = ((len_acc + 7) / 8) * 8 - len_acc;
 
-    stack_ptr -= pad_l;
-    memset (stack_ptr, 0, pad_l);
+    if_->rsp -= pad_l;
+    memset (if_->rsp, 0, pad_l);
   }
 
   for (i = argc; i >= 0; i--) {
     if (i == argc) {
-      stack_ptr -= 8;
-      *(char **) stack_ptr = 0;
+      if_->rsp -= 8;
+      *(char **) if_->rsp = 0;
     } else {
-      stack_ptr -= 8;
-      *(char **) stack_ptr = address[i];
+      if_->rsp -= 8;
+      *(char **) if_->rsp = address[i];
     }
   }
 
-  stack_ptr -= 8;
-  memset (stack_ptr, 0, 8);
-  if_->R.rdi = argc - 1;
-  if_->R.rsi = stack_ptr + 8;
+  if_->rsp -= 8;
+  memset (if_->rsp, 0, 8); /* fake address */
+  if_->R.rdi = argc;
+  if_->R.rsi = if_->rsp + 8;
 
   success = true;
 

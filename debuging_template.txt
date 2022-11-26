@@ -1,0 +1,48 @@
+printf ("##################\n");
+printf ("0x%llx is kernel??: %d\n", file_name, is_kernel_vaddr (file_name));
+printf ("##################\n");
+
+printf ("##################\n");
+printf ("0x%llx is kernel??: %d\n", fn_copy, is_kernel_vaddr (fn_copy));
+printf ("KERN_BASE: 0x%llx\n", KERN_BASE);
+printf ("##################\n");
+
+
+## list traverse
+for (cur = list_begin (&t->child_processes);
+     cur != list_end (&t->child_processes);
+     cur = list_next (cur)) {
+
+    struct child *temp_child = list_entry (cur, struct child, elem);
+}
+
+## parrent-child-pair
+printf ("CURRENT THREAD IS: %d %s\n", thread_current ()->tid,
+        thread_current ()->name);
+printf ("PARENT THREAD IS: %d %s\n", thread_current ()->parent->tid,
+        thread_current ()->parent->name);
+
+struct list_elem *cur;
+for (cur = list_begin (&thread_current ()->parent->child_processes);
+     cur != list_end (&thread_current ()->parent->child_processes);
+     cur = list_next (cur)) {
+
+  struct child *temp_child = list_entry (cur, struct child, elem);
+  printf ("CHILD THREAD IS: %d %s\n", temp_child->child_thread_p->tid,
+          temp_child->child_thread_p->name);
+}
+
+
+
+        // printf ("############################\n");
+        // printf (" \
+        //   writable: %d\n \
+        //   file_page: 0x%lx\n \ 
+        //   mem_page: 0x%lx\n \ 
+        //   page_offset: 0x%lx\n \ 
+        //   read_bytes: %d\n \
+        //   zero_bytes: %d\n",
+        //         writable, file_page, mem_page, page_offset, read_bytes,
+        //         zero_bytes);
+        // printf ("############################\n");
+
