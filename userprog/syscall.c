@@ -1,15 +1,21 @@
 #include "userprog/syscall.h"
 #include <stdio.h>
 #include <syscall-nr.h>
-// #include <palloc.h>
-#include "threads/palloc.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "threads/loader.h"
 #include "userprog/gdt.h"
-#include "userprog/process.h"
 #include "threads/flags.h"
+// #include "threads/init.h"
 #include "intrinsic.h"
+#include "userprog/process.h"
+// #include "kernel/stdio.h"
+#include "lib/stdio.h"
+
+#include "threads/palloc.h"
+#include "filesys/file.h"
+#include "filesys/filesys.h"
+// #include "user/syscall.h"
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
@@ -45,7 +51,7 @@ static void sys_exit (int status);
 static tid_t sys_fork (const char *thread_name, struct intr_frame *f);
 static int sys_exec (const char *file);
 static int sys_wait (pid_t);
-static bool sys_create (const char *file, unsigned initial_size);
+static bool sys_create (const char *file_name, unsigned initial_size);
 static bool sys_remove (const char *file);
 static int sys_open (const char *file);
 static int sys_filesize (int fd);
@@ -54,6 +60,9 @@ static int sys_write (int fd, const void *buffer, unsigned length);
 static void sys_seek (int fd, unsigned position);
 static unsigned sys_tell (int fd);
 static void sys_close (int fd);
+/* helper functions */
+static void check_address (void *add);
+static struct file_fd_pair *traverse (struct list *files, int fd);
 
 void
 __dump_frame (const struct intr_frame *f) {
@@ -75,18 +84,12 @@ __dump_frame (const struct intr_frame *f) {
 /* The main system call interface */
 void
 syscall_handler (struct intr_frame *f) {
-  // TODO: Your implementation goes here.
-  // 1.return 값은 rax에 담자
-
-  // __dump_frame (f);
   // hex_dump (f, f, sizeof (struct intr_frame), true);
-
   // hex_dump (&f->rsp, &f->rsp, 256, true);
-
-  // printf ("syscall no: %d\n", f->R.rax);
   // hex_dump (f->R.rsi, f->R.rsi, 256, true);
   // printf ("is kernel: %d\n", is_kernel_vaddr (f->R.rsi));
   // printf ("system call!\n");
+
   switch (f->R.rax) {
   case SYS_HALT:
     sys_halt ();
@@ -101,7 +104,7 @@ syscall_handler (struct intr_frame *f) {
     break;
 
   case SYS_EXEC:
-    sys_exec (f->R.rdi);
+    f->R.rax = sys_exec (f->R.rdi);
     break;
 
   case SYS_WAIT:
@@ -109,45 +112,58 @@ syscall_handler (struct intr_frame *f) {
     break;
 
   case SYS_CREATE:
+    f->R.rax = sys_create (f->R.rdi, f->R.rsi);
     break;
 
   case SYS_REMOVE:
+    f->R.rax = sys_remove (f->R.rdi);
     break;
 
   case SYS_OPEN:
+    f->R.rax = sys_open (f->R.rdi);
     break;
 
   case SYS_FILESIZE:
+    f->R.rax = sys_filesize (f->R.rdi);
     break;
 
   case SYS_READ:
+    f->R.rax = sys_read (f->R.rdi, f->R.rsi, f->R.rdx);
     break;
 
   case SYS_WRITE:
-    if (f->R.rdi == 1) {
-      putbuf (f->R.rsi, f->R.rdx);
-    }
+    f->R.rax = sys_write (f->R.rdi, f->R.rsi, f->R.rdx);
     break;
 
   case SYS_SEEK:
+    sys_seek (f->R.rdi, f->R.rsi);
     break;
 
   case SYS_TELL:
+    f->R.rax = sys_tell (f->R.rdi);
     break;
+
   case SYS_CLOSE:
+    // printf ("<11> %s %d #########\n", thread_current ()->name, thread_current
+    // ()->tid);
+    sys_close (f->R.rdi);
+    // printf ("<12> %s %d #########\n", thread_current ()->name, thread_current
+    // ()->tid);
     break;
 
   default:
+    printf ("##############################\n");
+    printf ("## UNEXPECTED TERMINATION!! ##\n");
+    printf ("##############################\n");
+    thread_exit ();
     break;
   }
-
-  // thread_exit ();
 }
 
 static void
 sys_halt (void) {
   power_off ();
-};
+}
 
 static void
 sys_exit (int status) {
@@ -172,6 +188,12 @@ sys_exit (int status) {
 
   thread_exit ();
 }
+
+void
+__exit (int status) {
+  sys_exit (status);
+}
+
 static tid_t
 sys_fork (const char *thread_name, struct intr_frame *f) {
   return process_fork (thread_name, f);
@@ -179,6 +201,7 @@ sys_fork (const char *thread_name, struct intr_frame *f) {
 
 static int
 sys_exec (const char *file) {
+  check_address (file);
   int file_len = strlen (file) + 1;
 
   char *fn_copy = palloc_get_page (PAL_ZERO);
@@ -193,22 +216,190 @@ sys_exec (const char *file) {
     return -1;
   }
 
-  // return 0;
   NOT_REACHED ();
-};
+}
+
 static int
 sys_wait (tid_t tid) {
-  printf ("############################\n");
-  printf ("####   BEFORE WAIT    ######\n");
-  printf ("############################\n");
   return process_wait (tid);
-};
-// static bool sys_create (const char *file, unsigned initial_size);
-// static bool sys_remove (const char *file);
-// static int sys_open (const char *file);
-// static int sys_filesize (int fd);
-// static int sys_read (int fd, void *buffer, unsigned length);
-// static int sys_write (int fd, const void *buffer, unsigned length);
-// static void sys_seek (int fd, unsigned position);
-// static unsigned sys_tell (int fd);
-// static void sys_close (int fd);
+}
+
+static bool
+sys_create (const char *file_name, unsigned initial_size) {
+  check_address (file_name);
+
+  acquire_filesys_lock ();
+  bool result = filesys_create (file_name, initial_size);
+  release_filesys_lock ();
+
+  return result;
+}
+
+static bool
+sys_remove (const char *file) {
+  check_address (file);
+
+  acquire_filesys_lock ();
+  bool result = filesys_remove (file);
+  release_filesys_lock ();
+
+  return result;
+}
+
+static int
+sys_open (const char *file) {
+  check_address (file);
+
+  acquire_filesys_lock ();
+  struct file *file_objp = filesys_open (file);
+  release_filesys_lock ();
+
+  if (!file_objp) {
+    return -1;
+  }
+
+  struct thread *curr = thread_current ();
+  struct file_fd_pair *pair = malloc (sizeof (struct file_fd_pair));
+
+  pair->file_p = file_objp;
+  pair->fd = curr->fd_no;
+  curr->fd_no++;
+
+  list_push_back (&curr->files, &pair->elem);
+
+  // if (pair->fd== -1) { file_close (file_objp); }
+
+  return pair->fd;
+}
+
+static int
+sys_filesize (int fd) {
+
+  acquire_filesys_lock ();
+  int result = file_length (traverse (&thread_current ()->files, fd)->file_p);
+  release_filesys_lock ();
+
+  return result;
+}
+
+static int
+sys_read (int fd, void *buffer, unsigned length) {
+  check_address (buffer);
+
+  char *buff = (char *) buffer;
+
+  if (fd == STDIN_FILENO) {
+    int i;
+
+    for (i = 0; i < length; i++) {
+      buff[i] = input_getc ();
+    }
+
+    return length;
+  } else {
+    struct file_fd_pair *pair = traverse (&thread_current ()->files, fd);
+    if (pair == NULL) {
+      return -1;
+    } else {
+      acquire_filesys_lock ();
+      int result = file_read (pair->file_p, buffer, length);
+      release_filesys_lock ();
+      return result;
+    }
+  }
+}
+
+static int
+sys_write (int fd, const void *buffer, unsigned length) {
+  check_address (buffer);
+
+  if (fd == STDOUT_FILENO) {
+    putbuf (buffer, length);
+  } else {
+    struct file_fd_pair *pair = traverse (&thread_current ()->files, fd);
+    if (pair == NULL) {
+      return -1;
+    } else {
+
+      acquire_filesys_lock ();
+      int result = file_write (pair->file_p, buffer, length);
+      release_filesys_lock ();
+
+      return result;
+    }
+  }
+}
+
+static void
+sys_seek (int fd, unsigned position) {
+  acquire_filesys_lock ();
+  file_seek (traverse (&thread_current ()->files, fd)->file_p, position);
+  release_filesys_lock ();
+}
+
+static unsigned
+sys_tell (int fd) {
+  acquire_filesys_lock ();
+  file_tell (traverse (&thread_current ()->files, fd)->file_p);
+  release_filesys_lock ();
+}
+
+static void
+sys_close (int fd) {
+  struct file_fd_pair *pair;
+  struct file_fd_pair *pair_another;
+  struct list_elem *cur;
+
+  struct list *file_listp = &thread_current ()->files;
+
+  acquire_filesys_lock ();
+  for (cur = list_begin (file_listp); cur != list_end (file_listp);
+       cur = list_next (cur)) {
+    pair = list_entry (cur, struct file_fd_pair, elem);
+
+    if (pair->fd > 10) {
+      printf ("%c\n", *(char *) pair->fd);
+    }
+
+    if (pair->fd == fd) {
+      file_close (pair->file_p);
+      list_remove (cur);
+      break;
+    }
+  }
+
+  if (pair != NULL) {
+    free (pair);
+  }
+  pair = NULL;
+
+  release_filesys_lock ();
+}
+
+/* helper functions */
+static void
+check_address (void *add) {
+  struct thread *curr = thread_current ();
+  if (!is_user_vaddr (add) || add == NULL ||
+      pml4_get_page (curr->pml4, add) == NULL) {
+    sys_exit (-1);
+  }
+}
+
+static struct file_fd_pair *
+traverse (struct list *file_listp, int fd) {
+  struct list_elem *cur;
+  struct file_fd_pair *pair;
+
+  for (cur = list_begin (file_listp); cur != list_end (file_listp);
+       cur = list_next (cur)) {
+
+    pair = list_entry (cur, struct file_fd_pair, elem);
+
+    if ((pair->fd) == fd) {
+      return pair;
+    }
+  }
+
+  return NULL;
+}

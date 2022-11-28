@@ -2,14 +2,21 @@
 #define FILESYS_FILESYS_H
 
 #include <stdbool.h>
+#include <list.h>
 #include "filesys/off_t.h"
 
 /* Sectors of system file inodes. */
-#define FREE_MAP_SECTOR 0       /* Free map file inode sector. */
-#define ROOT_DIR_SECTOR 1       /* Root directory file inode sector. */
+#define FREE_MAP_SECTOR 0 /* Free map file inode sector. */
+#define ROOT_DIR_SECTOR 1 /* Root directory file inode sector. */
 
 /* Disk used for file system. */
 extern struct disk *filesys_disk;
+
+struct file_fd_pair {
+  struct file *file_p;
+  int fd;
+  struct list_elem elem;
+};
 
 void filesys_init (bool format);
 void filesys_done (void);

@@ -46,3 +46,32 @@ for (cur = list_begin (&thread_current ()->parent->child_processes);
         //         zero_bytes);
         // printf ("############################\n");
 
+
+
+## fork
+  // printf ("##################################\n");
+  // printf ("##################################\n");
+  // printf ("##################################\n");
+  // printf ("CURRENT PROCESS IS: %s\n", thread_current ()->name);
+  // printf ("AND CHILD PROCESSES ARE:\n");
+  // struct list_elem *cur;
+  // int iteration = 1;
+  // for (cur = list_begin (&thread_current ()->child_processes);
+  //      cur != list_end (&thread_current ()->child_processes);
+  //      cur = list_next (cur)) {
+
+  //   struct child *temp_child = list_entry (cur, struct child, elem);
+  //   printf ("[%d] (TID) %d (NAME) %s (PARENT) %s\n", iteration,
+  //           temp_child->child_thread_p->tid, temp_child->child_thread_p->name,
+  //           temp_child->child_thread_p->parent->name
+
+  //   );
+  //   // hex_dump (
+
+  //   //     temp_child->child_thread_p->parent,
+  //   //     temp_child->child_thread_p->parent, 16, true);
+  //   iteration++;
+  // }
+  // printf ("##################################\n");
+  // printf ("##################################\n");
+  // printf ("##################################\n\n");

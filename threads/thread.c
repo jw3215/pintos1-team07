@@ -37,6 +37,9 @@ static struct thread *initial_thread;
 /* Lock used by allocate_tid(). */
 static struct lock tid_lock;
 
+/* Lock for file system*/
+static struct lock filesys_lock;
+
 /* Thread destruction requests */
 static struct list destruction_req;
 
@@ -63,6 +66,16 @@ static void do_schedule (int status);
 static void schedule (void);
 static tid_t allocate_tid (void);
 void test_max_priority (void);
+
+void
+acquire_filesys_lock () {
+  lock_acquire (&filesys_lock);
+}
+
+void
+release_filesys_lock () {
+  lock_release (&filesys_lock);
+}
 
 /* Returns true if T appears to point to a valid thread. */
 #define is_thread(t) ((t) != NULL && (t)->magic == THREAD_MAGIC)
@@ -107,6 +120,7 @@ thread_init (void) {
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&destruction_req);
+  lock_init (&filesys_lock);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -192,8 +206,9 @@ thread_create (const char *name, int priority, thread_func *function,
   tid = t->tid = allocate_tid ();
 
   struct child *child_obj = malloc (sizeof (struct child));
+  child_obj->tid = tid;
   child_obj->child_thread_p = t;
-  child_obj->exit_err = 0xFFFF;
+  child_obj->exit_err = EXIT_STATUS_DEFAULT;
 
   list_push_back (&thread_current ()->child_processes, &child_obj->elem);
 
@@ -487,8 +502,8 @@ init_thread (struct thread *t, const char *name, int priority) {
   list_init (&t->dona);
 
   /* For Project 2 */
-  t->exit_err = 0xFFFF;
-  t->fd_no = 2;
+  t->exit_err = EXIT_STATUS_DEFAULT;
+  t->fd_no = 3;
   t->process_waiting_for = 0;
 
   list_init (&t->child_processes);

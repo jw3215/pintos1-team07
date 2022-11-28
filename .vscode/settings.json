@@ -7,7 +7,9 @@
     "process.h": "c",
     "intrinsic.h": "c",
     "thread.h": "c",
-    "*.inc": "c"
+    "*.inc": "c",
+    "filesys.h": "c",
+    "flags.h": "c"
   },
   "workbench.colorCustomizations": {
     "activityBar.activeBackground": "#2f7c47",

@@ -23,6 +23,8 @@ enum thread_status {
 typedef int tid_t;
 #define TID_ERROR ((tid_t) -1) /* Error value for tid_t. */
 
+#define EXIT_STATUS_DEFAULT 0xFFFF
+
 /* Thread priorities. */
 #define PRI_MIN     0  /* Lowest priority. */
 #define PRI_DEFAULT 31 /* Default priority. */
@@ -101,8 +103,8 @@ struct thread {
   /* for project2 */
   int exit_err;
   bool exec_success;
-  int fd_no;                     // start from 2  (0,1,2 is reserved)
-  tid_t process_waiting_for;     // child procces that waiting for waiting
+  int fd_no;                     // start from 3  (0,1,2 is reserved)
+  tid_t process_waiting_for;     // child proccess that waiting for waiting
                                  // only one child at a time.
   struct list child_processes;   // list of child processes
   struct list files;             // list of files
@@ -129,6 +131,7 @@ struct thread {
 };
 
 struct child {
+  tid_t tid;
   struct thread *child_thread_p;
   struct list_elem elem;
   int exit_err;
@@ -176,4 +179,7 @@ void dona_priority (void);
 void remove_lock (struct lock *lock);
 void refresh_pri (void);
 
+/* Implement for file system synchronization */
+void acquire_filesys_lock (void);
+void release_filesys_lock (void);
 #endif /* threads/thread.h */

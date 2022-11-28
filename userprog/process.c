@@ -27,6 +27,12 @@ static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
 static void __do_fork (void *);
 
+struct args_for_do_fork {
+  struct thread *parent;
+  struct intr_frame *userlv_if;
+  struct semaphore lock;
+};
+
 /* General process initializer for initd and other process. */
 static void
 process_init (void) {
@@ -82,9 +88,35 @@ initd (void *f_name) {
 /* Clones the current process as `name`. Returns the new process's thread id, or
  * TID_ERROR if the thread cannot be created. */
 tid_t
-process_fork (const char *name, struct intr_frame *if_ UNUSED) {
+process_fork (const char *name, struct intr_frame *if_) {
+  struct args_for_do_fork aux;
+
+  aux.parent = thread_current ();
+  aux.userlv_if = if_;
+  sema_init (&aux.lock, 0);
+
   /* Clone current thread to new thread.*/
-  return thread_create (name, PRI_DEFAULT, __do_fork, thread_current ());
+  tid_t tid = thread_create (name, PRI_DEFAULT, __do_fork, &aux);
+
+  if (tid == TID_ERROR)   // 쓰레드 생성실패
+    return TID_ERROR;
+
+  thread_current ()->process_waiting_for = tid;
+  sema_down (&aux.lock);
+
+  // __do fork가 실패하는 경우
+
+  for (struct list_elem *cur = list_begin (&aux.parent->child_processes);
+       cur != list_end (&aux.parent->child_processes); cur = list_next (cur)) {
+
+    struct child *temp_child = list_entry (cur, struct child, elem);
+
+    if ((temp_child->child_thread_p->tid) == tid &&
+        temp_child->child_thread_p->exit_err == TID_ERROR)
+      return TID_ERROR;
+  }
+
+  return tid;
 }
 
 #ifndef VM
@@ -93,27 +125,40 @@ process_fork (const char *name, struct intr_frame *if_ UNUSED) {
 static bool
 duplicate_pte (uint64_t *pte, void *va, void *aux) {
   struct thread *current = thread_current ();
-  struct thread *parent = (struct thread *) aux;
-  void *parent_page;
-  void *newpage;
+  struct args_for_do_fork *args = (struct args_for_do_fork *) aux;
+  struct thread *parent = args->parent;
+  void *parent_page;   // kernel level address
+  void *newpage;       // kernel level address
   bool writable;
 
   /* 1. TODO: If the parent_page is kernel page, then return immediately. */
-
+  if (is_kernel_vaddr (va))
+    return true;
   /* 2. Resolve VA from the parent's page map level 4. */
-  parent_page = pml4_get_page (parent->pml4, va);
+  parent_page = pml4_get_page (parent->pml4, va);   // kernel level의 va return
+  if (parent_page == NULL)
+    return false;
 
   /* 3. TODO: Allocate new PAL_USER page for the child and set result to
    *    TODO: NEWPAGE. */
+  newpage = palloc_get_page (PAL_USER);
+  if (newpage == NULL) {
+    printf ("duplicate_pte page fault!\n\n");
+    return false;
+  }
 
   /* 4. TODO: Duplicate parent's page to the new page and
    *    TODO: check whether parent's page is writable or not (set WRITABLE
    *    TODO: according to the result). */
+  memcpy (newpage, parent_page, PGSIZE);
+  writable = is_writable (pte);
 
   /* 5. Add new page to child's page table at address VA with WRITABLE
    *    permission. */
   if (!pml4_set_page (current->pml4, va, newpage, writable)) {
     /* 6. TODO: if fail to insert page, do error handling. */
+    printf ("duplicate_pte pmlt_set_page fault!\n");
+    return false;
   }
   return true;
 }
@@ -126,10 +171,11 @@ duplicate_pte (uint64_t *pte, void *va, void *aux) {
 static void
 __do_fork (void *aux) {
   struct intr_frame if_;
-  struct thread *parent = (struct thread *) aux;
+  struct args_for_do_fork *args = (struct args_for_do_fork *) aux;
+  struct thread *parent = args->parent;
   struct thread *current = thread_current ();
   /* TODO: somehow pass the parent_if. (i.e. process_fork()'s if_) */
-  struct intr_frame *parent_if = &parent->tf;
+  struct intr_frame *parent_if = args->userlv_if;
   bool succ = true;
 
   /* 1. Read the cpu context to local stack. */
@@ -146,7 +192,7 @@ __do_fork (void *aux) {
   if (!supplemental_page_table_copy (&current->spt, &parent->spt))
     goto error;
 #else
-  if (!pml4_for_each (parent->pml4, duplicate_pte, parent))
+  if (!pml4_for_each (parent->pml4, duplicate_pte, args))
     goto error;
 #endif
 
@@ -156,12 +202,41 @@ __do_fork (void *aux) {
    * TODO:       from the fork() until this function successfully duplicates
    * TODO:       the resources of parent.*/
 
+  /* duplicate fd_list */
+
+  for (struct list_elem *cur = list_begin (&parent->files);
+       cur != list_end (&parent->files); cur = list_next (cur)) {
+
+    struct file_fd_pair *pair = list_entry (cur, struct file_fd_pair, elem);
+
+    // acquire_filesys_lock ();
+    struct file *file_objp = file_duplicate (pair->file_p);
+    // release_filesys_lock ();
+
+    struct file_fd_pair *n_pair = malloc (sizeof (struct file_fd_pair));
+
+    n_pair->file_p = file_objp;
+    n_pair->fd = current->fd_no;
+    current->fd_no++;
+
+    list_push_back (&current->files, &n_pair->elem);
+
+    // printf ("%d\n", current->fd_no);
+    // file_duplicate()
+  }
+
+  /* duplicate fd_list */
   process_init ();
 
-  /* Finally, switch to the newly created process. */
+  current->exit_err = 0;
+  sema_up (&args->lock);
+
+  if_.R.rax = 0;   // 자식 프로세스의 return: 0
   if (succ)
     do_iret (&if_);
 error:
+  sema_up (&args->lock);
+  current->exit_err = TID_ERROR;
   thread_exit ();
 }
 
@@ -208,7 +283,7 @@ process_exec (void *f_name) {
  * This function will be implemented in problem 2-2.  For now, it
  * does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) {
+process_wait (tid_t child_tid) {
   //! infinite loop
   // while (1) {
   //   continue;
@@ -221,14 +296,39 @@ process_wait (tid_t child_tid UNUSED) {
   struct thread *t = thread_current ();
   struct child *c = NULL;
 
+  // printf ("@@@@@@@@@@@@@@@@@@@@@@\n");
+  // printf ("@@@@@@@@@@@@@@@@@@@@@@\n");
+
+  // printf ("CURRENT PROCESS IS: <%d> %s\n", t->tid, t->name);
+  // for (cur = list_begin (&t->child_processes);
+  //      cur != list_end (&t->child_processes); cur = list_next (cur)) {
+
+  //   struct child *temp_child = list_entry (cur, struct child, elem);
+
+  //   // printf ("child-idx: <%lx> status <%x>\n",
+  //   //         temp_child->child_thread_p->tid - 4, temp_child->exit_err);
+
+  //   printf ("child-tid: <%d> status <%x>\n", temp_child->tid,
+  //           temp_child->exit_err);
+
+  //   hex_dump (0, temp_child->child_thread_p->name, 16, true);
+  // }
+  // printf ("@@@@@@@@@@@@@@@@@@@@@@\n");
+  // printf ("@@@@@@@@@@@@@@@@@@@@@@\n");
+  // printf ("\n");
+
   for (cur = list_begin (&t->child_processes);
        cur != list_end (&t->child_processes); cur = list_next (cur)) {
 
     struct child *temp_child = list_entry (cur, struct child, elem);
 
-    if ((temp_child->child_thread_p->tid) == child_tid) {
+    if ((temp_child->tid) == child_tid) {
+      if (temp_child->exit_err != EXIT_STATUS_DEFAULT) {
+        return temp_child->exit_err;
+      }
       c = temp_child;
       c_node = cur;
+      break;
     }
   }
 
@@ -238,14 +338,17 @@ process_wait (tid_t child_tid UNUSED) {
     return -1;
   }
 
-  // if (!c_node){ return -1; } //? 꼭 해야하는가. list가 비어있는 케이스?
+  // if (!c_node) { return -1; }   //? 꼭 해야하는가. list가 비어있는 케이스?
 
-  t->process_waiting_for = c->child_thread_p->tid;
+  t->process_waiting_for = child_tid;
   sema_down (&t->child_lock);
 
   int i = c->exit_err;
 
   list_remove (c_node);
+  if (c)
+    free (c);
+
   return i;
 }
 
@@ -254,7 +357,9 @@ void
 process_exit (void) {
   struct thread *curr = thread_current ();
 
-  printf ("%s: exit(%d)\n", curr->name, curr->exit_err);
+  file_close (curr->me);
+  if (curr->exit_err != EXIT_STATUS_DEFAULT)
+    printf ("%s: exit(%d)\n", curr->name, curr->exit_err);
   /* TODO: Your code goes here.
    * TODO: We recommend you to implement process resource cleanup here. */
   process_cleanup ();
@@ -410,6 +515,9 @@ load (const char *file_name, struct intr_frame *if_) {
     goto done;
   }
 
+  t->me = file;
+  file_deny_write (file);
+
   /* Read program headers. */
   file_ofs = ehdr.e_phoff;
   for (i = 0; i < ehdr.e_phnum; i++) {
@@ -509,7 +617,7 @@ load (const char *file_name, struct intr_frame *if_) {
 
 done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
+  // file_close (file);
   return success;
 }
 
