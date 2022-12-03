@@ -89,6 +89,7 @@ syscall_handler (struct intr_frame *f) {
   // hex_dump (f->R.rsi, f->R.rsi, 256, true);
   // printf ("is kernel: %d\n", is_kernel_vaddr (f->R.rsi));
   // printf ("system call!\n");
+  // printf ("system no: %lx\n", f->R.rax);
 
   switch (f->R.rax) {
   case SYS_HALT:
@@ -144,11 +145,7 @@ syscall_handler (struct intr_frame *f) {
     break;
 
   case SYS_CLOSE:
-    // printf ("<11> %s %d #########\n", thread_current ()->name, thread_current
-    // ()->tid);
     sys_close (f->R.rdi);
-    // printf ("<12> %s %d #########\n", thread_current ()->name, thread_current
-    // ()->tid);
     break;
 
   default:
@@ -167,20 +164,18 @@ sys_halt (void) {
 
 static void
 sys_exit (int status) {
-  struct list_elem *cur;
   struct thread *t = thread_current ();
+  t->exit_err = status;
 
-  for (cur = list_begin (&t->parent->child_processes);
+  for (struct list_elem *cur = list_begin (&t->parent->child_processes);
        cur != list_end (&t->parent->child_processes); cur = list_next (cur)) {
 
     struct child *c = list_entry (cur, struct child, elem);
     // parent의 자식프로세스 리스트에서 자신을 찾는다
     if (c->child_thread_p->tid == t->tid) {
-      c->exit_err = status;
+      c->exit_err = t->exit_err;
     }
   }
-
-  t->exit_err = status;
 
   if (t->parent->process_waiting_for == t->tid) {
     sema_up (&t->parent->child_lock);
@@ -248,6 +243,7 @@ sys_remove (const char *file) {
 
 static int
 sys_open (const char *file) {
+  // return -1;
   check_address (file);
 
   acquire_filesys_lock ();
@@ -275,9 +271,9 @@ sys_open (const char *file) {
 static int
 sys_filesize (int fd) {
 
-  acquire_filesys_lock ();
+  // acquire_filesys_lock ();
   int result = file_length (traverse (&thread_current ()->files, fd)->file_p);
-  release_filesys_lock ();
+  // release_filesys_lock ();
 
   return result;
 }
@@ -347,7 +343,6 @@ sys_tell (int fd) {
 static void
 sys_close (int fd) {
   struct file_fd_pair *pair;
-  struct file_fd_pair *pair_another;
   struct list_elem *cur;
 
   struct list *file_listp = &thread_current ()->files;
@@ -356,10 +351,6 @@ sys_close (int fd) {
   for (cur = list_begin (file_listp); cur != list_end (file_listp);
        cur = list_next (cur)) {
     pair = list_entry (cur, struct file_fd_pair, elem);
-
-    if (pair->fd > 10) {
-      printf ("%c\n", *(char *) pair->fd);
-    }
 
     if (pair->fd == fd) {
       file_close (pair->file_p);
@@ -370,8 +361,8 @@ sys_close (int fd) {
 
   if (pair != NULL) {
     free (pair);
+    pair = NULL;
   }
-  pair = NULL;
 
   release_filesys_lock ();
 }

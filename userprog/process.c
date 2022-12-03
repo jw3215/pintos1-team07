@@ -60,8 +60,13 @@ process_create_initd (const char *file_name) {
 
   /* Create a new thread to execute FILE_NAME. */
   name = (char *) malloc (strlen (file_name) + 1);
-  strlcpy (name, file_name, strlen (file_name) + 1);
-  name = strtok_r (name, " ", &_remainer);
+  if (name == NULL) {
+    palloc_free_page (fn_copy);
+    return TID_ERROR;
+  } else {
+    strlcpy (name, file_name, strlen (file_name) + 1);
+    name = strtok_r (name, " ", &_remainer);
+  }
 
   tid = thread_create (name, PRI_DEFAULT, initd, fn_copy);
   free (name);
@@ -105,7 +110,6 @@ process_fork (const char *name, struct intr_frame *if_) {
   sema_down (&aux.lock);
 
   // __do fork가 실패하는 경우
-
   for (struct list_elem *cur = list_begin (&aux.parent->child_processes);
        cur != list_end (&aux.parent->child_processes); cur = list_next (cur)) {
 
@@ -125,8 +129,7 @@ process_fork (const char *name, struct intr_frame *if_) {
 static bool
 duplicate_pte (uint64_t *pte, void *va, void *aux) {
   struct thread *current = thread_current ();
-  struct args_for_do_fork *args = (struct args_for_do_fork *) aux;
-  struct thread *parent = args->parent;
+  struct thread *parent = (struct thread *) aux;
   void *parent_page;   // kernel level address
   void *newpage;       // kernel level address
   bool writable;
@@ -192,7 +195,7 @@ __do_fork (void *aux) {
   if (!supplemental_page_table_copy (&current->spt, &parent->spt))
     goto error;
 #else
-  if (!pml4_for_each (parent->pml4, duplicate_pte, args))
+  if (!pml4_for_each (parent->pml4, duplicate_pte, parent))
     goto error;
 #endif
 
@@ -203,29 +206,9 @@ __do_fork (void *aux) {
    * TODO:       the resources of parent.*/
 
   /* duplicate fd_list */
+  if (duplicate_fd_list (parent, current) == -1)
+    goto error;
 
-  for (struct list_elem *cur = list_begin (&parent->files);
-       cur != list_end (&parent->files); cur = list_next (cur)) {
-
-    struct file_fd_pair *pair = list_entry (cur, struct file_fd_pair, elem);
-
-    // acquire_filesys_lock ();
-    struct file *file_objp = file_duplicate (pair->file_p);
-    // release_filesys_lock ();
-
-    struct file_fd_pair *n_pair = malloc (sizeof (struct file_fd_pair));
-
-    n_pair->file_p = file_objp;
-    n_pair->fd = current->fd_no;
-    current->fd_no++;
-
-    list_push_back (&current->files, &n_pair->elem);
-
-    // printf ("%d\n", current->fd_no);
-    // file_duplicate()
-  }
-
-  /* duplicate fd_list */
   process_init ();
 
   current->exit_err = 0;
@@ -356,12 +339,40 @@ process_wait (tid_t child_tid) {
 void
 process_exit (void) {
   struct thread *curr = thread_current ();
+  struct child *c = NULL;
 
   file_close (curr->me);
   if (curr->exit_err != EXIT_STATUS_DEFAULT)
     printf ("%s: exit(%d)\n", curr->name, curr->exit_err);
   /* TODO: Your code goes here.
    * TODO: We recommend you to implement process resource cleanup here. */
+
+  /* 프로세스의 유품 정리 */
+
+  /* child struct 정리*/
+  // for (struct list_elem *cur = list_begin (&curr->parent->child_processes);
+  //      cur != list_end (&curr->parent->child_processes);
+  //      cur = list_next (cur)) {
+
+  //   c = list_entry (cur, struct child, elem);
+  //   if (c->tid == curr->tid) {
+  //     printf ("%d %d\n", c->tid, curr->tid);
+  // list_remove (cur);
+  //     break;
+  //   }
+  // }
+
+  // if (c != NULL) {
+  //   free (c);
+  //   c = NULL;
+  // }
+
+  /* child struct 정리*/
+  while (!list_empty (&curr->files)) {
+    struct list_elem *e = list_pop_front (&curr->files);
+    free (list_entry (e, struct file_fd_pair, elem));
+  }
+
   process_cleanup ();
 }
 
@@ -832,3 +843,40 @@ setup_stack (struct intr_frame *if_) {
   return success;
 }
 #endif /* VM */
+
+int
+duplicate_fd_list (struct thread *parent, struct thread *child) {
+  struct list *p_fd_list, *c_fd_list;
+  struct file_fd_pair *pair;
+  struct file *copy_filep;
+
+  p_fd_list = &parent->files;
+  c_fd_list = &child->files;
+
+  if (list_empty (p_fd_list)) {
+    return 0;
+  }
+
+  // struct list_elem *cur;
+
+  for (struct list_elem *cur = list_begin (p_fd_list);
+       cur != list_end (p_fd_list); cur = list_next (cur)) {
+    pair = list_entry (cur, struct file_fd_pair, elem);
+    copy_filep = file_duplicate (pair->file_p);
+    if (copy_filep != NULL) {
+      struct file_fd_pair *n_pair =
+          (struct file_fd_pair *) malloc (sizeof (struct file_fd_pair));
+
+      if (n_pair == NULL)
+        return -1;
+      n_pair->file_p = copy_filep;
+      n_pair->fd = pair->fd;
+      child->fd_no = parent->fd_no;
+      list_push_back (c_fd_list, &n_pair->elem);
+    } else {
+      return -1;
+    }
+  }
+
+  return 0;
+}

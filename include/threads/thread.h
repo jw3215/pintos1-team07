@@ -102,7 +102,6 @@ struct thread {
 
   /* for project2 */
   int exit_err;
-  bool exec_success;
   int fd_no;                     // start from 3  (0,1,2 is reserved)
   tid_t process_waiting_for;     // child proccess that waiting for waiting
                                  // only one child at a time.

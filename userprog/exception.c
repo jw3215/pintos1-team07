@@ -138,6 +138,9 @@ page_fault (struct intr_frame *f) {
   user = (f->error_code & PF_U) != 0;
 
   if (user) {
+    // thread_current ()->exit_err = -1;
+    // thread_exit ();
+
     f->R.rdi = -1;
     __exit (-1);
   }
